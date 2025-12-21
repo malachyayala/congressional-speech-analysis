@@ -1,5 +1,7 @@
 *.csv
 *.txt
 *.db
+*.png
+*.json
 
 .venv/
