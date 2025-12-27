@@ -5,7 +5,7 @@ import logging
 import csv
 
 # --- CONFIGURATION ---
-DATA_DIR = '/Users/mj/Desktop/Misc/VSCodeStuff/legNLP/raw' 
+DATA_DIR = '/Users/mj/VSCodeStuff/legNLP/raw' 
 DB_NAME = 'congress_master.db'
 LOG_FILE = 'pipeline_rebuild.log'
 
@@ -86,7 +86,7 @@ def main():
         session_str = str(i).zfill(3)
         
         # Safety: Clear session if it exists to allow for a clean overwrite
-        conn.execute("DELETE FROM speeches WHERE congress_session = ?", (i,))
+        #conn.execute("DELETE FROM speeches WHERE congress_session = ?", (i,))
         conn.commit()
 
         df = load_congress_data(session_str, DATA_DIR)

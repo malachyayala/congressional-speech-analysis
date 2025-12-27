@@ -126,8 +126,7 @@ class CongressionalDashboard:
         if st.button("Browse Session", use_container_width=True):
             with st.spinner(f"Fetching records (Filter={filter_noise})..."):
                 # Pass the checkbox value to the DB manager
-                df = self.db.get_speeches_by_session(session_num, filter_procedural=filter_noise)
-
+                df = self.db.get_speeches_by_session(session_num, only_mapped=filter_noise)
             if not df.empty:
                 st.success(f"Showing {len(df)} substantive speeches.")
                 for _, row in df.iterrows():

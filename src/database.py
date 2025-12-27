@@ -5,7 +5,6 @@ import json
 import os
 
 # --- CONFIGURATION ---
-# We use the path you provided in your previous snippet
 FILTERS_PATH = r"C:\Users\ayala.ma\Documents\VScodeStuff\congressional-speech-analysis\filters.json"
 
 class DatabaseManager:
@@ -13,7 +12,6 @@ class DatabaseManager:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._setup_logging()
-        # Load the procedural terms immediately upon initialization
         self.procedural_terms = self._load_procedural_filters()
 
     def _setup_logging(self):
@@ -21,36 +19,27 @@ class DatabaseManager:
         self.logger = logging.getLogger(__name__)
 
     def _load_procedural_filters(self):
-        """
-        Loads the 'procedural_bigrams' list from filters.json.
-        Returns a Python Set for O(1) lookup speed.
-        """
         if os.path.exists(FILTERS_PATH):
             try:
                 with open(FILTERS_PATH, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    # Navigate to ['denoising_lexicon']['procedural_bigrams']
-                    # We use .get() to avoid crashing if keys are missing
                     lexicon = data.get('denoising_lexicon', {})
                     terms = lexicon.get('procedural_bigrams', [])
-                    
                     self.logger.info(f"Loaded {len(terms)} procedural terms from filters.json")
-                    return set(terms) # Convert to set for fast searching
+                    return set(terms)
             except Exception as e:
                 self.logger.error(f"Failed to load filters.json: {e}")
                 return set()
-        else:
-            self.logger.warning(f"filters.json not found at {FILTERS_PATH}")
-            return set()
+        return set()
 
     def get_connection(self):
-        """Creates a connection to the database."""
         return sqlite3.connect(self.db_path)
 
     def get_speech_by_id(self, speech_id: str) -> pd.DataFrame:
         clean_id = str(speech_id).strip()
+        # Including is_mapped and speaker for dashboard metadata
         query = """
-        SELECT speech_id, date, party, state_x, speech, congress_session
+        SELECT speech_id, date, speaker, party, state_x, speech, congress_session, is_mapped
         FROM speeches 
         WHERE speech_id = ?
         """
@@ -63,8 +52,14 @@ class DatabaseManager:
             self.logger.error(f"Error fetching speech {clean_id}: {e}")
             return pd.DataFrame()
 
-    def get_phrase_mentions_over_time(self, phrase: str) -> pd.DataFrame:
-        query = """
+    def get_phrase_mentions_over_time(self, phrase: str, only_mapped: bool = True) -> pd.DataFrame:
+        """
+        Analyzes trends. only_mapped=True (default) removes procedural noise 
+        to ensure partisan signals are accurate.
+        """
+        mapping_filter = "AND is_mapped = 1" if only_mapped else ""
+        
+        query = f"""
         SELECT 
             CAST(date / 10000 AS INTEGER) as year,
             party,
@@ -72,6 +67,7 @@ class DatabaseManager:
         FROM speeches 
         WHERE speech LIKE ? 
           AND party IN ('D', 'R')
+          {mapping_filter}
         GROUP BY year, party
         ORDER BY year ASC
         """
@@ -85,6 +81,8 @@ class DatabaseManager:
             return pd.DataFrame()
 
     def get_partisan_share(self, phrase: str) -> pd.DataFrame:
+        # Architect Note: We ALWAYS filter for is_mapped here because 
+        # unmapped speeches lack valid party data per the Codebook.
         query = """
         SELECT 
             congress_session,
@@ -93,6 +91,7 @@ class DatabaseManager:
             COUNT(*) as total
         FROM speeches 
         WHERE speech LIKE ? 
+          AND is_mapped = 1
           AND party IN ('D', 'R')
         GROUP BY congress_session
         ORDER BY congress_session ASC
@@ -109,53 +108,32 @@ class DatabaseManager:
             return pd.DataFrame()
 
     def is_substantive(self, text: str) -> bool:
-        """
-        Uses filters.json logic to determine if a speech is procedural.
-        """
+        """Final failsafe check using procedural bigram density."""
         if not text: return False
-        
-        # 1. Basic Cleaning
         words = str(text).lower().split()
-        
-        # 2. Length Check (Too short = likely noise)
-        if len(words) < 10: 
-            return False
-
-        # 3. Bigram Check (The core logic from your snippet)
-        # Create bigrams: "i yield", "yield the", "the floor"
+        if len(words) < 10: return False
         bigrams = [f"{words[i]} {words[i+1]}" for i in range(len(words)-1)]
-        
-        # Count how many bigrams match your JSON file
         noise_count = sum(1 for b in bigrams if b in self.procedural_terms)
-        
-        # 4. Density Threshold
-        # If more than 30% of the bigrams are procedural, discard it.
         return (noise_count / len(words)) < 0.30
 
-    def get_speeches_by_session(self, session: int, limit: int = 20, filter_procedural: bool = False) -> pd.DataFrame:
-        # Oversample to ensure we have enough left after filtering
-        fetch_limit = limit * 10 if filter_procedural else limit
+    def get_speeches_by_session(self, session: int, limit: int = 20, only_mapped: bool = True) -> pd.DataFrame:
+        """
+        Primary fetch for Dashboard. only_mapped=True uses the SQL engine 
+        to strip procedural noise instantly.
+        """
+        mapping_filter = "WHERE congress_session = ? AND is_mapped = 1" if only_mapped else "WHERE congress_session = ?"
         
-        query = """
-        SELECT speech_id, date, party, state_x, speech, congress_session
+        query = f"""
+        SELECT speech_id, date, speaker, party, state_x, speech, congress_session
         FROM speeches 
-        WHERE congress_session = ?
+        {mapping_filter}
         LIMIT ?
         """
         try:
             conn = self.get_connection()
-            df = pd.read_sql_query(query, conn, params=(int(session), fetch_limit))
+            df = pd.read_sql_query(query, conn, params=(int(session), limit))
             conn.close()
-            
-            if df.empty: return df
-
-            if filter_procedural:
-                # Apply the JSON-based filter
-                df['is_valid'] = df['speech'].apply(self.is_substantive)
-                df = df[df['is_valid']].drop(columns=['is_valid'])
-                
-            return df.head(limit)
-            
+            return df
         except Exception as e:
             self.logger.error(f"Session query failed: {e}")
             return pd.DataFrame()

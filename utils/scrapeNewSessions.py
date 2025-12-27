@@ -9,22 +9,25 @@ from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- CONFIGURATION ---
-# GET A KEY AT: https://api.data.gov/signup/
 API_KEY = "RgWUXBtZYgRdRoGg8h4fwdjBfekYbsPhCCbMl9sC"  
 DB_PATH = "congress_master.db" 
-MAX_WORKERS = 5  # Keep this low to respect API limits
+MAX_WORKERS = 3 
 
 # --- LOGGING SETUP ---
-# Logs will appear in 'ingest.log' and on your screen
 logger = logging.getLogger("CongressIngest")
 logger.setLevel(logging.INFO)
+
+# File Handler (Saves logs to file)
 fh = logging.FileHandler('ingest.log', mode='w')
 fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(fh)
+
+# Console Handler (Prints logs to screen)
 ch = logging.StreamHandler(sys.stdout)
 ch.setLevel(logging.INFO)
-logger.addHandler(fh)
 logger.addHandler(ch)
 
+# Failure Logger (Tracks specific error URLs)
 fail_logger = logging.getLogger("Failures")
 fail_handler = logging.FileHandler('failures.log', mode='a')
 fail_handler.setFormatter(logging.Formatter('%(message)s'))
@@ -44,7 +47,6 @@ class ModernCongressionalIngestor:
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode=WAL;")
         
-        # Main Speeches Table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS speeches (
                 speech_id TEXT PRIMARY KEY,
@@ -61,7 +63,6 @@ class ModernCongressionalIngestor:
             )
         """)
         
-        # Tracker Table so you can stop/resume without restarting
         conn.execute("""
             CREATE TABLE IF NOT EXISTS processed_packages (
                 package_id TEXT PRIMARY KEY,
@@ -72,7 +73,6 @@ class ModernCongressionalIngestor:
         conn.close()
 
     def safe_get(self, url, params=None):
-        """Robust GET request with exponential backoff for rate limits."""
         params = params or {}
         params['api_key'] = self.API_KEY
         
@@ -94,42 +94,29 @@ class ModernCongressionalIngestor:
 
     def clean_speech_text(self, raw_text):
         """
-        Removes the GPO headers you identified so they don't clutter the DB.
+        Removes GPO headers and cleanup artifacts.
         """
-        # 1. Normalize whitespace (tabs/newlines -> space)
         text = re.sub(r'\s+', ' ', raw_text).strip()
         
-        # 2. REMOVE HEADERS
-        # Matches: "Congressional Record, Volume 164..." or "[Congressional Record Volume...]"
+        # Remove Headers
         text = re.sub(r"\[?Congressional Record[,]? Volume \d+.*?\]", "", text, flags=re.IGNORECASE)
-        
-        # Matches: "[Senate]" or "[House]" or "[Extensions of Remarks]"
         text = re.sub(r"\[(Senate|House|Extensions of Remarks|Daily Digest)\]", "", text, flags=re.IGNORECASE)
-        
-        # Matches: "[Pages S8061-S8062]" or "[Page H49]"
         text = re.sub(r"\[?Pages? [HSE]?\d+(-[HSE]?\d+)?\]?", "", text, flags=re.IGNORECASE)
-        
-        # Matches the date stamp often found in headers e.g., "(Wednesday, January 2, 2019)"
         text = re.sub(r"\([A-Z][a-z]+, [A-Z][a-z]+ \d{1,2}, \d{4}\)", "", text)
 
-        # 3. REMOVE FOOTERS
+        # Remove Footers
         text = re.sub(r"From the Congressional Record Online.*?gpo\.gov", "", text, flags=re.IGNORECASE)
         
-        # 4. CLEANUP ARTIFACTS
-        # The user noted trailing " ] " often appears after the page number
+        # Remove Dangling Brackets (The " ] " fix)
+        text = re.sub(r"^[\s\]\)]+", "", text).strip()
         text = re.sub(r"\]\s*\]", "", text)
         
         return text.strip()
 
     def _sanitize_metadata(self, value):
-        """
-        Fixes the 'List/Dict' error. Ensures we always get a clean string.
-        """
-        # 1. Unwrap Lists (e.g. ['Paul Ryan'])
         while isinstance(value, list):
             value = value[0] if value else None
 
-        # 2. Unwrap Dictionaries (e.g. {'authority-fnf': 'Paul Ryan'})
         if isinstance(value, dict):
             value = (
                 value.get('authority-fnf') or 
@@ -140,34 +127,31 @@ class ModernCongressionalIngestor:
                 str(value)
             )
 
-        # 3. Final Check
         if value is None:
             return "Unknown"
         
         return str(value).strip()
 
-    def _fetch_single_speech(self, gran, date_str):
-        """
-        Worker function to process one speech granule.
-        """
+    def _fetch_single_speech(self, gran, date_str, package_congress):
         gran_id = gran['granuleId']
         
-        # --- FILTER 1: Only House/Senate Floor sections ---
+        # --- FILTERS ---
+        # This whitelists ONLY House (PgH) and Senate (PgS).
+        # Implicitly filters out PgE (Extensions) and PgD (Digest).
         if not any(x in gran_id for x in ['PgH', 'PgS', 'PGH', 'PGS']):
             return ("SKIP", "Not Floor Speech")
         
-        # Skip Front/Back matter (indexes, table of contents)
         if 'FrontMatter' in gran_id or 'BackMatter' in gran_id: 
             return ("SKIP", "Front/BackMatter")
 
-        # --- STEP 1: GET METADATA ---
+        # --- METADATA ---
         summary_resp = self.safe_get(gran['granuleLink'])
         if not summary_resp: 
             return ("ERROR", f"{gran_id} - Metadata Fail")
         
         summary_json = summary_resp.json()
         
-        # --- STEP 2: GET TEXT ---
+        # --- TEXT ---
         download_links = summary_json.get('download', {})
         txt_url = download_links.get('txtLink')
         
@@ -178,7 +162,6 @@ class ModernCongressionalIngestor:
         if not t_resp: 
             return ("ERROR", f"{gran_id} - Text Download Fail")
         
-        # Handle encoding quirks
         try:
             raw_html = t_resp.content.decode('utf-8')
         except UnicodeDecodeError:
@@ -187,14 +170,14 @@ class ModernCongressionalIngestor:
         soup = BeautifulSoup(raw_html, 'html.parser')
         raw_text = soup.get_text(separator=' ')
         
-        # --- STEP 3: CLEAN & VALIDATE ---
+        # --- CLEANING ---
         clean_text = self.clean_speech_text(raw_text)
         
-        # GHOST FILTER: If the file was JUST a header, it will now be empty.
+        # Empty text filter (Ghosts)
         if len(clean_text) < 50:
             return ("SKIP", "Empty/Header Only")
 
-        # --- STEP 4: IDENTIFY SPEAKER ---
+        # --- SPEAKER ID ---
         members = summary_json.get('members', [])
         
         speaker_name = "Unknown Speaker"
@@ -207,20 +190,16 @@ class ModernCongressionalIngestor:
         
         if members:
             m = members[0]
-            
-            # Use the robust sanitizer here
             speaker_name = self._sanitize_metadata(m.get('name', 'Unknown Speaker'))
             party = self._sanitize_metadata(m.get('party', 'Unknown'))
             state = self._sanitize_metadata(m.get('state', 'Unknown'))
             is_mapped = 1
             
-            # Try to get Bioguide ID number
             bid = self._sanitize_metadata(m.get('bioguideId', ''))
             if bid and bid != "Unknown":
                 digits = ''.join(filter(str.isdigit, bid))
                 if digits: bio_id_num = int(digits)
 
-            # Name parsing (Handle "Foxx, Virginia" vs "Virginia Foxx")
             if ',' in speaker_name:
                 parts = speaker_name.split(',')
                 lastname = parts[0].strip()
@@ -233,21 +212,21 @@ class ModernCongressionalIngestor:
                     lastname = parts[-1]
                 
         else:
-            # Fallback: Regex for when API returns no members
             match = re.match(r"^(Mr\.|Ms\.|Mrs\.|The)\s+([A-Za-z\s]+)(\.|:)", clean_text[:50])
             if match:
                 title = match.group(1)
                 name_raw = match.group(2).strip()
-                name_clean = re.sub(r"\s+of\s+[A-Za-z]+$", "", name_raw) # Remove "of Texas"
-                
+                name_clean = re.sub(r"\s+of\s+[A-Za-z]+$", "", name_raw)
                 speaker_name = f"{title} {name_clean}".title()
                 lastname = name_clean.split()[-1].title()
 
-        # --- STEP 5: RETURN DATA ---
+        # --- DATA PREP ---
         try:
             date_int = int(date_str)
         except:
             date_int = 0
+
+        final_congress = package_congress if package_congress != "Unknown" else self._sanitize_metadata(summary_json.get('congress', '0'))
 
         data_tuple = (
             gran_id, 
@@ -260,14 +239,14 @@ class ModernCongressionalIngestor:
             state, 
             lastname, 
             firstname, 
-            self._sanitize_metadata(summary_json.get('congress', '0'))
+            str(final_congress)
         )
         return ("SUCCESS", data_tuple)
 
     def process_package(self, pkg, conn):
         pkg_id = pkg['packageId']
-        
-        # Parse date from ID: CREC-2018-01-05 -> 20180105
+        package_congress = self._sanitize_metadata(pkg.get('congress', 'Unknown'))
+
         try:
             parts = pkg_id.split('-')
             date_str = f"{parts[1]}{parts[2]}{parts[3]}"
@@ -277,10 +256,14 @@ class ModernCongressionalIngestor:
         offset = 0
         page_size = 100
         
-        tqdm.write(f"\n   > Processing Record: {pkg_id}")
+        # --- AUDIT COUNTERS ---
+        total_saved = 0
+        total_skipped = 0
+        total_errors = 0
+        
+        tqdm.write(f"\n   > Processing Record: {pkg_id} (Congress: {package_congress})")
 
         while True:
-            # Fetch batch of granules
             gran_url = f"{self.GOVINFO_BASE}/packages/{pkg_id}/granules"
             g_resp = self.safe_get(gran_url, params={"pageSize": page_size, "offset": offset})
             
@@ -293,23 +276,30 @@ class ModernCongressionalIngestor:
             cursor = conn.cursor()
             results_to_insert = []
             
-            # Concurrency: Process granules in parallel
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_gran = {executor.submit(self._fetch_single_speech, g, date_str): g for g in granules}
+                future_to_gran = {
+                    executor.submit(self._fetch_single_speech, g, date_str, package_congress): g 
+                    for g in granules
+                }
                 
                 for future in tqdm(as_completed(future_to_gran), total=len(granules), desc="      Fetching", leave=True):
                     try:
                         status, result = future.result()
                         
+                        # --- UPDATE COUNTERS ---
                         if status == "SUCCESS":
                             results_to_insert.append(result)
+                            total_saved += 1
+                        elif status == "SKIP":
+                            total_skipped += 1
                         elif status == "ERROR":
-                            fail_logger.error(result)
+                            total_errors += 1
+                            fail_logger.error(f"{status}: {result}")
                             
                     except Exception as e:
                         logger.error(f"Thread Error: {e}")
+                        total_errors += 1
 
-            # Save Batch
             if results_to_insert:
                 cursor.executemany("""
                     INSERT OR REPLACE INTO speeches 
@@ -317,27 +307,25 @@ class ModernCongressionalIngestor:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, results_to_insert)
                 conn.commit()
-                
-                # Show a preview of the first saved speech to confirm data quality
-                sample = results_to_insert[0]
-                tqdm.write(f"      [Saved] {sample[0]} | {sample[4]} | Content Len: {len(sample[1])}")
 
-            # Pagination check
             count = data.get('count', 0)
             if offset + len(granules) >= count:
                 break
             offset += page_size
 
-        # Mark package as done
         cursor = conn.cursor()
         cursor.execute("INSERT OR IGNORE INTO processed_packages (package_id) VALUES (?)", (pkg_id,))
         conn.commit()
+        
+        # --- LOG THE TOTALS ---
+        audit_msg = f"[AUDIT] {pkg_id}: {total_saved} Saved | {total_skipped} Skipped | {total_errors} Errors"
+        #logger.info(audit_msg)
+        tqdm.write(audit_msg)
 
     def ingest_range(self, start_year: int, end_year: int):
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         cursor = conn.cursor()
         
-        # Resume Logic
         cursor.execute("SELECT package_id FROM processed_packages")
         processed_ids = {row[0] for row in cursor.fetchall()}
         tqdm.write(f"--- Resume Status: {len(processed_ids)} daily records already completed ---")
@@ -376,6 +364,5 @@ class ModernCongressionalIngestor:
         conn.close()
 
 if __name__ == "__main__":
-    # Change years as needed
     ingestor = ModernCongressionalIngestor()
-    ingestor.ingest_range(2020, 2020)
+    ingestor.ingest_range(2012, 2012)

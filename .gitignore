@@ -3,5 +3,6 @@
 *.db
 *.png
 *.json
+*.log
 
 .venv/

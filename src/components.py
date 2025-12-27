@@ -8,6 +8,15 @@ class UIComponents:
     """
     A library of reusable UI elements.
     """
+    
+        # Define strict colors: Blue for Dem, Red for Rep
+    PARTY_COLORS = ["#0000FF", "#FF0000"]  # Blue, Red
+    
+    PARTY_MAP = {
+        "D": "Democrat",
+        "R": "Republican"
+    }
+
 
     @staticmethod
     def display_header(title: str, subtitle: str = ""):
@@ -19,11 +28,19 @@ class UIComponents:
     @staticmethod
     def display_speech_card(row: pd.Series):
         with st.container():
+            # Add a Header for the Speaker Name [cite: 165]
+            speaker_name = row.get('speaker', 'Unknown Speaker')
+            st.subheader(f"Speaker: {speaker_name}")
+            
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Date", str(row.get('date', 'N/A')))
             c2.metric("Party", row.get('party', 'Unknown'))
             c3.metric("Session", f"{row.get('congress_session', 'N/A')}th")
             c4.metric("State", row.get('state_x', 'N/A'))
+
+            # Tag unmapped speeches visually so you know why they might be "noise"
+            if row.get('is_mapped') == 0:
+                st.warning("⚠️ Procedural/Unmapped Speech") [cite: 101]
 
             st.caption(f"Speech ID: {row.get('speech_id', 'Unknown')}")
             st.text_area(
@@ -32,15 +49,7 @@ class UIComponents:
                 height=300,
                 disabled=True
             )
-    # Map single letters to full names for the legend
-    PARTY_MAP = {
-        "D": "Democrat",
-        "R": "Republican"
-    }
-
-    # Define strict colors: Blue for Dem, Red for Rep
-    PARTY_COLORS = ["#0000FF", "#FF0000"]  # Blue, Red
-
+            
     @staticmethod
     def display_trend_chart(df: pd.DataFrame, phrase: str):
         """
