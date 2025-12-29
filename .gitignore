@@ -1,0 +1,16 @@
+*.csv
+*.txt
+*.db
+*.png
+*.json
+*.log
+*.zip
+
+.env
+
+.venv/
+sourceDocumentation/
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
