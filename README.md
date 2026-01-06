@@ -2,7 +2,7 @@
 
 **A high-performance NLP pipeline and analytical dashboard processing 17+ million records of U.S. Congressional history (43rd–119th Congress).**
 
-This project aggregates 140+ years of legislative data into a unified SQLite data warehouse, enabling semantic analysis of partisan trends and policy shifts. It features a hybrid ETL pipeline and a GPU-accelerated deep learning classification system to filter procedural noise from substantive debate.
+This project aggregates 140+ years of legislative data into a unified SQLite database, enabling semantic analysis of partisan trends and policy shifts. It features a hybrid ETL pipeline and a GPU-accelerated deep learning classification system to filter procedural noise from substantive debate.
 
 ---
 
@@ -19,7 +19,7 @@ This project aggregates 140+ years of legislative data into a unified SQLite dat
 ## System Architecture
 
 ### 1. Data Ingestion (The ETL Layer)
-The system aggregates data from two distinct sources into a unified `congress_master.db` SQLite warehouse:
+The system aggregates data from two distinct sources into a unified `congress_master.db` SQLite database:
 * **Historical (43rd–111th):** Parsed from the Stanford University Libraries Social Science Data Collection.
 * **Modern (112th–119th):** Sourced via the **GovInfo API**.
     * *Challenge:* The API enforces a limit of 36,000 requests/hour.
@@ -48,7 +48,7 @@ legNLP/
 ├── congress_master.db      # SQLite Warehouse (17M+ rows)
 ├── utils/
 │   ├── scrapeNewSessions.py # Multi-threaded API scraper (GovInfo)
-│   └── gpu_classifier.py    # Torch/CUDA inference script for Zero-Shot
+│   └── filterProcedure.py    # Torch/CUDA inference script for Zero-Shot
 ├── notebooks/
 │   └── legNLP.ipynb        # EDA and Prototype Logic
 ├── src/
