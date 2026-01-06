@@ -1,81 +1,56 @@
 # Congressional Record NLP Database & Dashboard
 
-This project assembles and analyzes a comprehensive database of Congressional Records spanning from the **43rd to the 119th Congress**. It includes tools for data ingestion, a SQLite database for storage, and a Streamlit dashboard for interactive NLP analysis.
+**A high-performance NLP pipeline and analytical dashboard processing 17+ million records of U.S. Congressional history (43rd–119th Congress).**
 
-## Features
+This project aggregates 140+ years of legislative data into a unified SQLite data warehouse, enabling semantic analysis of partisan trends and policy shifts. It features a hybrid ETL pipeline and a GPU-accelerated deep learning classification system to filter procedural noise from substantive debate.
 
-- **Extensive Database**: Contains speeches and metadata from the 43rd Congress to the .
-- **Data Ingestion**: Scripts to scrape and update records using the GovInfo API.
-- **Interactive Dashboard**: A Streamlit app to explore the data:
-  - **Search by ID**: Lookup specific speech records.
-  - **Phrase Trends**: Analyze the usage of specific phrases over time.
-  - **Partisan Analysis**: Compare speech patterns between parties.
-  - **Session Search**: Filter and browse speeches by congressional session.
+---
 
-## Database Schema
+## 🚀 Key Technical Highlights
 
-The core data is stored in a SQLite database (`congress_master.db`) with the following schema:
+* **Scale:** Successfully ingested and indexed **17 million+ rows** of text data.
+* **Hybrid Data Engineering:** Merged historical OCR data (Stanford) with modern API streams (GovInfo), normalizing schema across centuries of format changes.
+* **Deep Learning Pipeline:** Implemented Zero-Shot Classification using **DistilBART (`valhalla/distilbart-mnli-12-1`)** to distinguish administrative procedure from policy debate.
+* **Hardware Optimization:** Leveraged **NVIDIA RTX 4080 Super** with FP16 precision and dynamic batching to accelerate inference on the 17M dataset.
+* **Concurrency:** Built a robust scraping engine with multi-threading and automated rate-limit handling (sleep logic) to manage GovInfo's 36k/hour request cap.
 
-```sql
-CREATE TABLE "speeches" (
-  "speech_id" TEXT PRIMARY KEY,  -- Unique identifier for the speech
-  "speech" TEXT,                 -- Full text content of the speech
-  "date" INTEGER,                -- Date of the speech (YYYYMMDD format)
-  "speakerid" REAL,              -- Bioguide ID or internal identifier
-  "speaker" TEXT,                -- Full name of the speaker
-  "is_mapped" INTEGER,           -- Boolean flag indicating if speaker is mapped to metadata
-  "party" TEXT,                  -- Political party affiliation
-  "state_x" TEXT,                -- State abbreviation
-  "lastname" TEXT,               -- Speaker's last name
-  "firstname" TEXT,              -- Speaker's first name
-  "congress_session" INTEGER     -- Congress number (e.g., 118)
-);
-```
+---
 
-## Project Structure
+## 🛠️ System Architecture
 
-```
+### 1. Data Ingestion (The ETL Layer)
+The system aggregates data from two distinct sources into a unified `congress_master.db` SQLite warehouse:
+* **Historical (43rd–111th):** Parsed from the Stanford University Libraries Social Science Data Collection.
+* **Modern (112th–119th):** Sourced via the **GovInfo API**.
+    * *Challenge:* The API enforces a limit of 36,000 requests/hour.
+    * *Solution:* Developed a multi-threaded ingestion script with smart error handling that detects rate limits and sleeps for 45-minute intervals to maximize throughput without triggering bans.
+
+### 2. The NLP Filtering Pipeline
+To separate "Parliamentary Skeleton" (procedural noise) from "Policy Signal," the system uses a two-stage filter:
+1.  **Heuristic SQL Filter:** A fast-pass SQL script flags rows containing high-frequency procedural stopwords (e.g., "yield back", "quorum call").
+2.  **Zero-Shot Classification (semantic-filter):** Remaining speeches are passed through a `DistilBART` Zero-Shot classifier to assign a probability score of "Substantive" vs. "Procedural."
+    * *Optimization:* Inference is optimized via CUDA on an RTX 4080 Super, utilizing mixed precision (FP16) for memory efficiency.
+
+### 3. Frontend Dashboard
+A Streamlit application (`streamlitMain.py`) provides an interactive interface for researchers to:
+* **Search by ID:** Instant lookup of specific speech records.
+* **Phrase Trends:** Visualize the rise and fall of specific bigrams over 140 years.
+* **Partisan Analysis:** Compare semantic patterns between parties.
+* **Session Search:** Filter speeches by congressional session.
+
+---
+
+## 📂 Project Structure
+
+```text
 legNLP/
-├── streamlitMain.py           # Main entry point for the Streamlit dashboard
-├── congress_master.db         # SQLite database (not included in repo, generated)
+├── streamlitMain.py        # Main entry point for the Dashboard
+├── congress_master.db      # SQLite Warehouse (17M+ rows)
 ├── utils/
-│   └── scrapeNewSessions.py   # Script to ingest modern records via GovInfo API
+│   ├── scrapeNewSessions.py # Multi-threaded API scraper (GovInfo)
+│   └── gpu_classifier.py    # Torch/CUDA inference script for Zero-Shot
 ├── notebooks/
-│   └── legNLP.ipynb           # Jupyter notebook for exploratory data analysis
-├── src/                       # Application source code
-│   ├── database.py            # Database connection and query management
-│   └── components.py          # UI components for the Streamlit app
-```
-
-## Setup & Usage
-
-### Prerequisites
-
-- Python 3.8+
-- API Key for [GovInfo](https://api.govinfo.gov/) (for running the scraper)
-
-### Installation
-
-1. Clone the repository.
-2. Install the required Python packages (e.g., `streamlit`, `pandas`, `requests`, `beautifulsoup4`, `tqdm`).
-
-### Running the Dashboard
-
-To launch the interactive dashboard:
-
-```bash
-streamlit run streamlitMain.py
-```
-
-### Updating the Database
-
-To ingest new congressional records (requires API key configuration in the script):
-
-```bash
-python utils/scrapeNewSessions.py
-```
-
-## Data Sources
-
-- **Modern Records**: 112th-119th Congresses sourced from the [GovInfo API](https://api.govinfo.gov/).
-- **Historical Records**: 43rd-111th Congresses sourced from [Stanford University Libraries Social Science Data Collection](https://data.stanford.edu/congress_text).
+│   └── legNLP.ipynb        # EDA and Prototype Logic
+├── src/
+│   ├── database.py         # Connection pooling and SQL query management
+│   └── components.py       # Reusable Streamlit UI components
