@@ -6,7 +6,7 @@ This project aggregates 140+ years of legislative data into a unified SQLite dat
 
 ---
 
-## 🚀 Key Technical Highlights
+## Technical Highlights
 
 * **Scale:** Successfully ingested and indexed **17 million+ rows** of text data.
 * **Hybrid Data Engineering:** Merged historical OCR data (Stanford) with modern API streams (GovInfo), normalizing schema across centuries of format changes.
@@ -16,7 +16,7 @@ This project aggregates 140+ years of legislative data into a unified SQLite dat
 
 ---
 
-## 🛠️ System Architecture
+## System Architecture
 
 ### 1. Data Ingestion (The ETL Layer)
 The system aggregates data from two distinct sources into a unified `congress_master.db` SQLite warehouse:
@@ -40,7 +40,7 @@ A Streamlit application (`streamlitMain.py`) provides an interactive interface f
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 legNLP/
