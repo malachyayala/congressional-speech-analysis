@@ -45,8 +45,6 @@ legNLP/
 ├── src/                       # Application source code
 │   ├── database.py            # Database connection and query management
 │   └── components.py          # UI components for the Streamlit app
-├── raw/                       # Raw data files (Speaker maps, n-grams)
-└── processed/                 # Processed CSV datasets
 ```
 
 ## Setup & Usage
